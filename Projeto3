@@ -1,0 +1,225 @@
+// Main.c
+// Runs on LM4F120/TM4C123
+// Use Timer2 in 32-bit periodic mode to request interrupts at a periodic rate
+// Daniel Valvano
+// March 20, 2014
+
+/* This example accompanies the book
+   "Embedded Systems: Real Time Interfacing to Arm Cortex M Microcontrollers",
+   ISBN: 978-1463590154, Jonathan Valvano, copyright (c) 2013
+  Program 7.5, example 7.6
+
+ Copyright 2013 by Jonathan W. Valvano, valvano@mail.utexas.edu
+    You may use, edit, run or distribute this file
+    as long as the above copyright notice remains
+ THIS SOFTWARE IS PROVIDED "AS IS".  NO WARRANTIES, WHETHER EXPRESS, IMPLIED
+ OR STATUTORY, INCLUDING, BUT NOT LIMITED TO, IMPLIED WARRANTIES OF
+ MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE APPLY TO THIS SOFTWARE.
+ VALVANO SHALL NOT, IN ANY CIRCUMSTANCES, BE LIABLE FOR SPECIAL, INCIDENTAL,
+ OR CONSEQUENTIAL DAMAGES, FOR ANY REASON WHATSOEVER.
+ For more information about my classes, my research, and my books, see
+ http://users.ece.utexas.edu/~valvano/
+ */
+
+// oscilloscope or LED connected to PF3-1 for period measurement
+// When using the color wheel, the blue LED on PF2 is on for four
+// consecutive interrupts then off for four consecutive interrupts.
+// Blue is off for: dark, red, yellow, green
+// Blue is on for: light blue, blue, purple, white
+// Therefore, the frequency of the pulse measured on PF2 is 1/8 of
+// the frequency of the Timer2A interrupts.
+
+//===================================================================================
+//Nome: Paula Jokura
+//Data: 25/11/2021
+//Descrição: Projeto 3
+//===================================================================================
+
+#include "PLL.h"
+#include "Timer0.h"
+#include "tm4c123gh6pm.h"
+#include <stdint.h>
+#include "Systick.h"
+
+// 2. Declarations Section
+//   Global Variables
+unsigned long In;  						// 32 bits - input from PF4
+unsigned long Out; 						// outputs to PD3
+unsigned long OutGreen; 			// outputs to LED green
+unsigned long OutBlue; 				// outputs to LED blue
+unsigned long OutRed; 				// outputs to LED red
+unsigned long OutLed; 				// outputs to LED red
+signed long Estados;	 				// switch case
+
+void DisableInterrupts(void); // Disable interrupts
+void EnableInterrupts(void);  // Enable interrupts
+void WaitForInterrupt(void);  // low power mode
+void PortF_Init(void);
+
+void PortF_Init(void){
+	volatile unsigned long delay;
+  SYSCTL_RCGC2_R |= 0x00000028;    // F clock
+  delay = SYSCTL_RCGC2_R;          // delay   
+  GPIO_PORTF_LOCK_R = 0x4C4F434B;  // unlock PortF PF0  
+  GPIO_PORTF_CR_R = 0x1F;          // allow changes to PF4-0 
+  GPIO_PORTF_AMSEL_R = 0;          // disable analog functionality on PORTF
+  GPIO_PORTF_PCTL_R = 0x00000000;  // configure PORTF as GPIO
+  GPIO_PORTF_DIR_R |= 0x0E;        // make PF0, PF4 input, PF1-PF3 output
+  GPIO_PORTF_AFSEL_R &= ~0x1F;     // disable alt funct 
+  GPIO_PORTF_PUR_R = 0x11;         // enable weak pull-up on PF4 and PF0
+  GPIO_PORTF_DEN_R |= 0x1F;        // enable digital I/O
+	GPIO_PORTD_LOCK_R = 0x4C4F434B;  // 2) unlock PortD PD3  
+  GPIO_PORTD_CR_R = 0x04;          // allow changes to PD3       
+  GPIO_PORTD_AMSEL_R = 0x00;       // 3) disable analog function
+  GPIO_PORTD_PCTL_R = 0x00000000;  // 4) GPIO clear bit PCTL  
+  GPIO_PORTD_DIR_R = 0x04;         // 5) PD3 output   
+  GPIO_PORTD_AFSEL_R = 0x00;       // 6) no alternate function
+  GPIO_PORTD_PUR_R = 0x04;         // enable pullup resistors on PD3       
+  GPIO_PORTD_DEN_R = 0x04;         // 7) enable digital pins PD3
+}
+
+void Timer0A_Handler(void){
+  TIMER0_ICR_R = TIMER_ICR_TATOCINT;			// acknowledge TIMER0A timeout
+	Estados = Estados + 1;
+}
+
+//debug code
+int main(void){ volatile unsigned long delay;
+  PLL_Init();                      // bus clock at 80 MHz
+	PortF_Init();										 // initialize PortF
+  Timer0_Init(5000000); 					 // initialize timer1 (16 Hz)
+	SysTick_Init();
+  EnableInterrupts();
+
+  while(1){
+   // WaitForInterrupt();
+		switch(Estados){
+				
+		// 0 - Apagar os LEDs, aplicar nível lógico zero na saída PD3 
+		case 0:	
+		GPIO_PORTF_DATA_R = 0x00; 			 	// 0b0000_0000 LED is black
+		OutLed = GPIO_PORTF_DATA_R&0x0E;	// Indicar nível no LED 
+		GPIO_PORTD_DATA_R = 0x00;  				// 0x0000_0000 PD3 is low
+		Out = GPIO_PORTD_DATA_R&0x08;			// indicar o que tem na porta PD3
+		//break;
+		
+		// 1 - LED  azul pisca em 2.5 Hz e PD3 desligado
+		case 1:
+		
+		GPIO_PORTF_DATA_R = 0x04;  				// 0b0000_0100 LED is blue
+		OutBlue = GPIO_PORTF_DATA_R&0x04; // Indicar nível no LED azul
+		SysTick_Wait(16000000);						// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00;  				// 0b0000_0000 LED is black
+		OutBlue = GPIO_PORTF_DATA_R&0x04; // Indicar nível no LED azul
+		SysTick_Wait(16000000);						// 200ms (Tick = 12,5 ns => count = 16.000.000)
+			
+		GPIO_PORTD_DATA_R = 0x00; 	 	// 0x0000_0000 PD3 is low
+		Out = GPIO_PORTD_DATA_R&0x08;	// indicar o que tem na porta PD3
+		//break;
+			
+		// Caso chave SW2 pressionada, ir para case 4. Caso contrário, ir para case 3
+		case 2:
+			
+		In = GPIO_PORTF_DATA_R&0x01; // read PF0 into In - SW2
+					
+    if(In == 0x00){              // zero means SW2 is pressed
+			
+			Estados = Estados + 1;     // para pular para o case 4
+			
+			} else{                    // 0x01 means SW2 is not pressed
+			
+			// 3 - LED verde pisca 5 vezes
+		case 3:
+		GPIO_PORTF_DATA_R = 0x08;  // 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00;  					// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;  					// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00;  					// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;						// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00;					  // 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;  					// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00;  					// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08; 					// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00; 					// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		
+		Estados = 1;
+		
+		break;	
+				
+			}
+			
+		
+			
+		// 4 - LED red piscar 2 vezes
+		case 4:
+		GPIO_PORTF_DATA_R = 0x02;  				// 0b0000_0010 LED is red
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00; 				// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x02;  				// 0b0000_0010 LED is red
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00; 				// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		//break;
+		
+		// 5 - Fazer LED red piscar na frequência 2.5 Hz => T = 0.4 (s 2 vezes)
+		case 5:
+		GPIO_PORTF_DATA_R = 0x02;  					// 0b0000_0010 LED is red 2.5 Hz
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00; 					// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x02; 					// 0b0000_0010 LED is red 2.5 Hz
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x00; 					// 0b0000_0000 LED is black
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		//break;
+		
+		// 6 -  Piscar os 3 LEDs em sequência, 4 vezes e PD3 high
+		case 6:
+		GPIO_PORTF_DATA_R = 0x02; 					// 0b0000_0010 LED is red
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x04;  					// 0b0000_0100 LED is blue
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;  					// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x02;					  // 0b0000_0010 LED is red
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x04;  					// 0b0000_0100 LED is blue
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;  					// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x02; 					// 0b0000_0010 LED is red
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x04; 					// 0b0000_0100 LED is blue
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;					  // 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x02;  					// 0b0000_0010 LED is red
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x04;						// 0b0000_0100 LED is blue
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		GPIO_PORTF_DATA_R = 0x08;						// 0b0000_1000 LED is green
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+			
+		Out = GPIO_PORTD_DATA_R&0x08;				// indicar o que tem na porta PD3
+		
+		SysTick_Wait(16000000);							// 200ms (Tick = 12,5 ns => count = 16.000.000)
+		//break;
+			
+		// volta para o estágio 0
+		default: Estados = 0;
+		
+		break;
+		
+		  }
+    }
+  }
